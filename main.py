@@ -15,6 +15,8 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
 main_menu.add(KeyboardButton("👤 Аккаунт"))
 
+
+
 # Конфигурация из Replit Secrets
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
@@ -219,7 +221,11 @@ async def confirm_payment_with_bonus(callback_query: types.CallbackQuery, state:
     conn.commit()
 
     await bot.send_message(callback_query.message.chat.id, f"✅ Оплата подтверждена для {email}. Добавлено: {months} мес + {bonus} мес 🎁")
-
+    await bot.send_message(
+    callback_query.from_user.id,
+    "✅ Добро пожаловать! Используйте кнопку снизу для доступа к аккаунту.",
+    reply_markup=main_menu
+)
     cursor.execute("SELECT telegram FROM users WHERE email = ?", (email,))
     tg = cursor.fetchone()[0]
     await bot.send_message(tg, f"🎉 Поздравляем! Вы приобрели доступ на {months} месяцев и получили +{bonus} месяцев в подарок!")
