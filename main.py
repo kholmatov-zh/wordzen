@@ -167,13 +167,12 @@ async def show_tariffs(callback_query: types.CallbackQuery):
     )
     await callback_query.message.edit_text("💳 Выберите тариф:", reply_markup=tariffs)
 
-  @dp.callback_query_handler(lambda c: c.data.startswith("pay_"))
+@dp.callback_query_handler(lambda c: c.data.startswith("pay_"))
 async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
     months = int(callback_query.data.split("_")[1])
-    email = None
+    telegram_link = f"https://t.me/{callback_query.from_user.username}" if callback_query.from_user.username else callback_query.from_user.full_name
 
-    # Получаем email пользователя
-    cursor.execute("SELECT email FROM users WHERE telegram = ?", (f"https://t.me/{callback_query.from_user.username}",))
+    cursor.execute("SELECT email FROM users WHERE telegram = ?", (telegram_link,))
     row = cursor.fetchone()
     if row:
         email = row[0]
@@ -182,13 +181,14 @@ async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
 
         await bot.send_message(
             callback_query.from_user.id,
-            f"💳 Для оплаты выбрано: *{months} мес.*\n"
+            f"💳 Вы выбрали тариф: *{months} мес.*\n"
             f"Номер карты: `{CARD_NUMBER}`\n\n"
-            f"📸 Отправьте чек сюда после оплаты. Проверка — до 30 минут.",
+            f"📸 После оплаты отправьте сюда чек. Проверка — до 30 мин.",
             parse_mode="Markdown"
         )
     else:
         await bot.send_message(callback_query.from_user.id, "❗ Не удалось найти ваш email в базе.")
+
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_approve_"))
 async def confirm_payment_with_bonus(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = int(callback_query.data.split('_')[-1])
@@ -298,11 +298,50 @@ async def receive_any_payment(message: types.Message, state: FSMContext):
     await message.reply("🧾 Спасибо! Мы передали данные администратору. ⏳ Ожидайте решения.")
     await state.finish()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('payment_approve_'))
-async def approve_payment(callback_query: types.CallbackQuery):
-            user_id = int(callback_query.data.split('_')[-1])
-            await bot.send_message(user_id, "✅ Оплата подтверждена! Доступ открыт. Спасибо 🙌")
-            await bot.answer_callback_query(callback_query.id, "Оплата подтверждена!")
+@dp.callback_query_handler(lambda c: c.data.startswith("payment_approve_"))
+async def confirm_payment_with_bonus(callback_query: types.CallbackQuery, state: FSMContext):
+    user_id = int(callback_query.data.split('_')[-1])
+    telegram_link = f"https://t.me/{callback_query.from_user.username}" if callback_query.from_user.username else callback_query.from_user.full_name
+
+    cursor.execute("SELECT email FROM users WHERE telegram = ?", (telegram_link,))
+    row = cursor.fetchone()
+    if not row:
+        await callback_query.answer("Пользователь не найден.")
+        return
+
+    email = row[0]
+
+    cursor.execute("SELECT paid_months FROM users WHERE email = ?", (email,))
+    current_months = cursor.fetchone()[0]
+
+    # Определим бонусы
+    months = 1
+    bonus = 0
+
+    if current_months == 3:
+        months = 3
+        bonus = 1
+    elif current_months == 6:
+        months = 6
+        bonus = 2
+
+    total = months + bonus
+
+    cursor.execute(
+        "UPDATE users SET paid_months = paid_months + ?, payment_confirmed = 1 WHERE email = ?",
+        (total, email)
+    )
+    conn.commit()
+
+    await bot.send_message(callback_query.message.chat.id, f"✅ Оплата подтверждена для {email}. Добавлено: {months} мес + {bonus} мес 🎁")
+
+    cursor.execute("SELECT telegram FROM users WHERE email = ?", (email,))
+    tg = cursor.fetchone()[0]
+    try:
+        await bot.send_message(tg, f"🎉 Поздравляем! Вы приобрели доступ на {months} месяцев и получили +{bonus} месяцев в подарок!")
+    except:
+        pass
+
 
 @dp.callback_query_handler(lambda c: c.data.startswith('payment_reject_'))
 async def reject_payment(callback_query: types.CallbackQuery):
