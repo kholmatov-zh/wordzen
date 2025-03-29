@@ -261,7 +261,7 @@ async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
     user = db.get_user(user_id)
     if user:
         logger.info(f"Начало оплаты: user_id={user_id}, months={months}")
-        await state.update_data(user_id=user_id, months=months)
+        await state.update_data(user_id=user_id, months=months, email=user[2])  # Email из базы
         await callback_query.message.answer(
             f"💳 Вы выбрали тариф: *{months} мес.*\n"
             f"Номер карты: `{CARD_NUMBER}`\n\n"
@@ -269,6 +269,7 @@ async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
             parse_mode="Markdown"
         )
         await UserState.payment.set()
+        logger.info(f"Состояние установлено: UserState.payment для user_id={user_id}")
     else:
         await callback_query.message.answer("❗ Не удалось найти ваш аккаунт.")
 
@@ -278,6 +279,12 @@ async def receive_payment(message: types.Message, state: FSMContext):
     user_id = user_data.get("user_id")
     email = user_data.get("email")
     months = user_data.get("months")
+    if not all([user_id, email, months]):
+        logger.error(f"Недостаточно данных в state: user_id={user_id}, email={email}, months={months}")
+        await message.reply("❌ Ошибка: данные не найдены. Попробуйте начать заново.")
+        await state.finish()
+        return
+
     telegram = f"https://t.me/{message.from_user.username}" if message.from_user.username else message.from_user.full_name
     caption = f"📥 Новый платёж на проверку:\n\n🆔 User ID: {user_id}\n📧 Email: {obfuscate_email(email)}\n👤 Telegram: {telegram}\n📅 Выбранный тариф: {months} мес"
 
@@ -295,7 +302,6 @@ async def receive_payment(message: types.Message, state: FSMContext):
         logger.error(f"Ошибка при отправке чека админу: {e}")
         await message.reply("❌ Ошибка при отправке чека. Попробуйте снова.")
     await state.finish()
-
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_approve_"))
 async def confirm_payment(callback_query: types.CallbackQuery):
     logger.info(f"Получен callback: {callback_query.data}")
