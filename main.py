@@ -56,7 +56,9 @@ class Database:
 
     def get_user(self, user_id):
         self.cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        return self.cursor.fetchone()
+        result = self.cursor.fetchone()
+        logger.info(f"Поиск пользователя: user_id={user_id}, результат={result}")
+        return result
 
     def update_payment(self, user_id, months, bonus=0):
         total = months + bonus
@@ -65,6 +67,7 @@ class Database:
             (total, (datetime.now() + timedelta(days=30 * total)).strftime('%Y-%m-%d'), user_id)
         )
         self.conn.commit()
+        logger.info(f"Обновлена оплата: user_id={user_id}, months={months}, bonus={bonus}")
 
     def get_unpaid_users(self, date):
         self.cursor.execute("SELECT email, telegram FROM users WHERE payment_due = ? AND payment_confirmed = 0", (date,))
@@ -79,6 +82,19 @@ class Database:
         return self.cursor.fetchall()
 
 db = Database()
+
+# Функция для предотвращения распознавания email как ссылки
+def obfuscate_email(email):
+    parts = email.split("@")
+    if len(parts) == 2:
+        domain = parts[1].split(".")
+        if len(domain) >= 2:
+            obfuscated = parts[0] + "@\u200B" + ".".join(domain[:-1]) + ".\u200B" + domain[-1]
+        else:
+            obfuscated = parts[0] + "@\u200B" + parts[1]
+    else:
+        obfuscated = email
+    return obfuscated
 
 # Клавиатуры
 def get_main_menu():
@@ -104,9 +120,10 @@ def get_payment_options(user_id):
         InlineKeyboardButton("📅 3 месяца — 300₽ +1 мес 🎁", callback_data=f"pay_3_{user_id}")
     )
 
-def get_confirmation_buttons(user_id, months):
+def get_confirmation_buttons(user_id):
     return InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton("✅ Подтвердить", callback_data=f"payment_approve_{user_id}_{months}"),
+        InlineKeyboardButton("✅ Подтвердить (1 мес)", callback_data=f"payment_approve_{user_id}_1"),
+        InlineKeyboardButton("✅ Подтвердить (3 мес)", callback_data=f"payment_approve_{user_id}_3"),
         InlineKeyboardButton("❌ Отклонить", callback_data=f"payment_reject_{user_id}")
     )
 
@@ -118,10 +135,11 @@ def get_profile_buttons(email):
 
 # Вспомогательные функции
 def format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed):
+    obfuscated_email = obfuscate_email(email)
     return (
         f"👤 *Ваш профиль:*\n"
         f"🆔 User ID: `{user_id}`\n"
-        f"📧 Email: `{email}`\n"
+        f"📧 Email: `{obfuscated_email}`\n"
         f"👤 Telegram: `{telegram}`\n"
         f"📚 Книги: {books or 'не выбрано'}\n"
         f"⏳ Пробный доступ до: *{trial_end}*\n"
@@ -216,7 +234,7 @@ async def confirm_books(callback_query: types.CallbackQuery, state: FSMContext):
 
     text = (
         f"📝 *Ваша регистрация завершена!* 🎉\n\n"
-        f"📧 Email: `{email}`\n"
+        f"📧 Email: `{obfuscate_email(email)}`\n"
         f"👤 Telegram: `{telegram}`\n"
         f"📚 Книги: {books or 'не выбрано'}\n"
         f"⏳ Пробный доступ до: *{(datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d')}*\n\n"
@@ -232,6 +250,7 @@ async def confirm_books(callback_query: types.CallbackQuery, state: FSMContext):
 @dp.callback_query_handler(lambda c: c.data == "payment_options")
 async def show_tariffs(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
+    logger.info(f"Показ тарифов для user_id={user_id}")
     await callback_query.message.edit_text("💳 Выберите тариф:", reply_markup=get_payment_options(user_id))
 
 @dp.callback_query_handler(lambda c: c.data.startswith("pay_"))
@@ -241,6 +260,7 @@ async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = int(parts[2])
     user = db.get_user(user_id)
     if user:
+        logger.info(f"Начало оплаты: user_id={user_id}, months={months}")
         await state.update_data(user_id=user_id, months=months)
         await callback_query.message.answer(
             f"💳 Вы выбрали тариф: *{months} мес.*\n"
@@ -259,25 +279,26 @@ async def receive_payment(message: types.Message, state: FSMContext):
     email = user_data.get("email")
     months = user_data.get("months")
     telegram = f"https://t.me/{message.from_user.username}" if message.from_user.username else message.from_user.full_name
-    caption = f"📥 Новый платёж на проверку:\n\n📧 Email: {email}\n👤 Telegram: {telegram}\n📅 Месяцев: {months}"
+    caption = f"📥 Новый платёж на проверку:\n\n🆔 User ID: {user_id}\n📧 Email: {obfuscate_email(email)}\n👤 Telegram: {telegram}\n📅 Выбранный тариф: {months} мес"
 
     try:
         for admin_id in ADMIN_IDS:
             if message.photo:
-                await bot.send_photo(admin_id, message.photo[-1].file_id, caption=caption, reply_markup=get_confirmation_buttons(user_id, months))
+                await bot.send_photo(admin_id, message.photo[-1].file_id, caption=caption, reply_markup=get_confirmation_buttons(user_id))
             elif message.document:
-                await bot.send_document(admin_id, message.document.file_id, caption=caption, reply_markup=get_confirmation_buttons(user_id, months))
+                await bot.send_document(admin_id, message.document.file_id, caption=caption, reply_markup=get_confirmation_buttons(user_id))
             else:
-                await bot.send_message(admin_id, caption + f"\n\n📄 Текст:\n{message.text}", reply_markup=get_confirmation_buttons(user_id, months))
+                await bot.send_message(admin_id, caption + f"\n\n📄 Текст:\n{message.text}", reply_markup=get_confirmation_buttons(user_id))
         await message.reply("🧾 Спасибо! Мы передали данные администратору. ⏳ Ожидайте решения.")
+        logger.info(f"Чек отправлен админу: user_id={user_id}, months={months}")
     except Exception as e:
         logger.error(f"Ошибка при отправке чека админу: {e}")
         await message.reply("❌ Ошибка при отправке чека. Попробуйте снова.")
     await state.finish()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_approve_"))
-async def confirm_payment(callback_query: types.CallbackQuery, state: FSMContext):
-    logger.info(f"Получен callback для подтверждения: {callback_query.data}")
+async def confirm_payment(callback_query: types.CallbackQuery):
+    logger.info(f"Получен callback: {callback_query.data}")
     parts = callback_query.data.split("_")
     user_id = int(parts[2])
     months = int(parts[3])
@@ -291,7 +312,7 @@ async def confirm_payment(callback_query: types.CallbackQuery, state: FSMContext
     bonus = calculate_bonus(months)
     db.update_payment(user_id, months, bonus)
 
-    await callback_query.message.edit_text(f"✅ Оплата подтверждена для {email}. Добавлено: {months} мес + {bonus} мес 🎁")
+    await callback_query.message.edit_text(f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁")
     await bot.send_message(
         user_id,
         "✅ Добро пожаловать! Используйте кнопку снизу для доступа к профилю.",
@@ -302,7 +323,7 @@ async def confirm_payment(callback_query: types.CallbackQuery, state: FSMContext
 
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_reject_"))
 async def reject_payment(callback_query: types.CallbackQuery):
-    logger.info(f"Получен callback для отклонения: {callback_query.data}")
+    logger.info(f"Получен callback: {callback_query.data}")
     user_id = int(callback_query.data.split("_")[2])
     await bot.send_message(user_id, "❌ К сожалению, оплата не прошла проверку. Попробуйте ещё раз или свяжитесь с поддержкой.")
     await callback_query.answer("Оплата отклонена.")
@@ -311,7 +332,7 @@ async def reject_payment(callback_query: types.CallbackQuery):
 @dp.message_handler(lambda message: message.text == "👤 Профиль")
 async def profile_info(message: types.Message):
     user_id = message.from_user.id
-    logger.info(f"Поиск пользователя с user_id: {user_id}")
+    logger.info(f"Поиск профиля для user_id: {user_id}")
     user = db.get_user(user_id)
     if user:
         user_id, _, email, telegram, books, trial_end, payment_due, paid, confirmed = user
@@ -350,7 +371,7 @@ async def list_users(message: types.Message):
     text = "👥 Список пользователей:\n"
     for user in users:
         user_id, email, telegram, trial_end, paid, confirmed = user
-        text += f"\n🆔 {user_id}\n📧 {email}\n👤 {telegram}\n⏳ До: {trial_end}\n💰 Месяцев: {paid}\n✅ Оплачен: {'Да' if confirmed else 'Нет'}\n---"
+        text += f"\n🆔 {user_id}\n📧 {obfuscate_email(email)}\n👤 {telegram}\n⏳ До: {trial_end}\n💰 Месяцев: {paid}\n✅ Оплачен: {'Да' if confirmed else 'Нет'}\n---"
     await message.answer(text)
 
 async def check_payments():
@@ -360,11 +381,11 @@ async def check_payments():
 
         for email, telegram in db.get_unpaid_users(now):
             for admin_id in ADMIN_IDS:
-                await bot.send_message(admin_id, f"❗ Ученик не оплатил:\nEmail: {email}\nTelegram: {telegram}")
+                await bot.send_message(admin_id, f"❗ Ученик не оплатил:\nEmail: {obfuscate_email(email)}\nTelegram: {telegram}")
 
         for email, telegram in db.get_users_near_trial_end(tomorrow):
             for admin_id in ADMIN_IDS:
-                await bot.send_message(admin_id, f"⏰ Завтра заканчивается триал у:\nEmail: {email}\nTelegram: {telegram}")
+                await bot.send_message(admin_id, f"⏰ Завтра заканчивается триал у:\nEmail: {obfuscate_email(email)}\nTelegram: {telegram}")
             try:
                 await bot.send_message(telegram, f"⏳ Завтра заканчивается ваш пробный период в Wordzen. Оплатите подписку: {CARD_NUMBER}")
             except Exception as e:
