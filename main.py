@@ -153,8 +153,76 @@ async def confirm_books(callback_query: types.CallbackQuery, state: FSMContext):
     buttons = InlineKeyboardMarkup(row_width=1)
     buttons.add(
         InlineKeyboardButton("✅ Перейти в канал", url=CHANNEL_LINK),
-        InlineKeyboardButton("💳 Оплатить", callback_data=f'payment_check_{email}')
+        InlineKeyboardButton("💳 Оплатить", callback_data="payment_options")
     )
+@dp.callback_query_handler(lambda c: c.data == "payment_options")
+async def show_tariffs(callback_query: types.CallbackQuery):
+    tariffs = InlineKeyboardMarkup(row_width=1)
+    tariffs.add(
+        InlineKeyboardButton("📅 1 месяц — 100₽", callback_data="pay_1"),
+        InlineKeyboardButton("📅 3 месяца — 300₽ +1 мес 🎁", callback_data="pay_3"),
+        InlineKeyboardButton("📅 6 месяцев — 600₽ +2 мес 🎁", callback_data="pay_6")
+    )
+    await callback_query.message.edit_text("💳 Выберите тариф:", reply_markup=tariffs)
+
+  @dp.callback_query_handler(lambda c: c.data.startswith("pay_"))
+async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
+    months = int(callback_query.data.split("_")[1])
+    email = None
+
+    # Получаем email пользователя
+    cursor.execute("SELECT email FROM users WHERE telegram = ?", (f"https://t.me/{callback_query.from_user.username}",))
+    row = cursor.fetchone()
+    if row:
+        email = row[0]
+        await state.update_data(email=email, months=months)
+        await UserState.payment.set()
+
+        await bot.send_message(
+            callback_query.from_user.id,
+            f"💳 Для оплаты выбрано: *{months} мес.*\n"
+            f"Номер карты: `{CARD_NUMBER}`\n\n"
+            f"📸 Отправьте чек сюда после оплаты. Проверка — до 30 минут.",
+            parse_mode="Markdown"
+        )
+    else:
+        await bot.send_message(callback_query.from_user.id, "❗ Не удалось найти ваш email в базе.")
+@dp.callback_query_handler(lambda c: c.data.startswith("payment_approve_"))
+async def confirm_payment_with_bonus(callback_query: types.CallbackQuery, state: FSMContext):
+    user_id = int(callback_query.data.split('_')[-1])
+
+    cursor.execute("SELECT email FROM users WHERE telegram LIKE ?", (f"%{user_id}%",))
+    row = cursor.fetchone()
+    if not row:
+        await callback_query.answer("Пользователь не найден.")
+        return
+
+    email = row[0]
+    # Попробуем получить данные о выбранном тарифе
+    months = 1  # по умолчанию
+    bonus = 0
+
+    # Если ты хочешь точно передавать тариф — храни его в БД или FSM
+
+    # Простейшая логика бонусов:
+    if months == 3:
+        bonus = 1
+    elif months == 6:
+        bonus = 2
+
+    total = months + bonus
+
+    cursor.execute(
+        "UPDATE users SET paid_months = paid_months + ?, payment_confirmed = 1 WHERE email = ?",
+        (total, email)
+    )
+    conn.commit()
+
+    await bot.send_message(callback_query.message.chat.id, f"✅ Оплата подтверждена для {email}. Добавлено: {months} мес + {bonus} мес 🎁")
+
+    cursor.execute("SELECT telegram FROM users WHERE email = ?", (email,))
+    tg = cursor.fetchone()[0]
+    await bot.send_message(tg, f"🎉 Поздравляем! Вы приобрели доступ на {months} месяцев и получили +{bonus} месяцев в подарок!")
 
     await bot.edit_message_text(
         chat_id=callback_query.message.chat.id,
