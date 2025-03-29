@@ -306,19 +306,33 @@ async def receive_payment(message: types.Message, state: FSMContext):
 async def confirm_payment(callback_query: types.CallbackQuery):
     logger.info(f"Получен callback: {callback_query.data}")
     parts = callback_query.data.split("_")
+    if len(parts) != 4:
+        logger.error(f"Неверный формат callback_data: {callback_query.data}")
+        await callback_query.answer("❌ Ошибка: неверный запрос.")
+        return
+
     user_id = int(parts[2])
     months = int(parts[3])
     user = db.get_user(user_id)
     if not user:
         logger.error(f"Пользователь с user_id={user_id} не найден")
-        await callback_query.answer("Пользователь не найден.")
+        await callback_query.answer("❌ Пользователь не найден.")
         return
 
     email = user[2]
     bonus = calculate_bonus(months)
     db.update_payment(user_id, months, bonus)
 
-    await callback_query.message.edit_text(f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁")
+    # Проверяем тип сообщения и действуем соответственно
+    if callback_query.message.text:
+        # Если есть текст, редактируем его
+        await callback_query.message.edit_text(f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁")
+    else:
+        # Если это фото или документ, отправляем новое сообщение и удаляем старое
+        await bot.send_message(callback_query.message.chat.id, f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁")
+        await callback_query.message.delete()
+
+    # Отправляем уведомления пользователю
     await bot.send_message(
         user_id,
         "✅ Добро пожаловать! Используйте кнопку снизу для доступа к профилю.",
@@ -326,7 +340,6 @@ async def confirm_payment(callback_query: types.CallbackQuery):
     )
     await bot.send_message(user_id, f"🎉 Поздравляем! Вы приобрели доступ на {months} месяцев и получили +{bonus} месяцев в подарок!")
     logger.info(f"Оплата подтверждена: user_id={user_id}, months={months}, bonus={bonus}")
-
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_reject_"))
 async def reject_payment(callback_query: types.CallbackQuery):
     logger.info(f"Получен callback: {callback_query.data}")
