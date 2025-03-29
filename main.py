@@ -10,8 +10,10 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 from keep_alive import keep_alive
 import sqlite3
 
-# Конфигурация
-logging.basicConfig(level=logging.INFO)
+# Конфигурация логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 TOKEN = os.getenv("TOKEN")
 ADMIN_IDS = [int(admin_id) for admin_id in os.getenv("ADMIN_IDS", "").split(",") if admin_id]
 if not ADMIN_IDS:
@@ -79,11 +81,11 @@ db = Database()
 # Клавиатуры
 def get_main_menu():
     return ReplyKeyboardMarkup(resize_keyboard=True).add(
-        KeyboardButton("👤 Профиль")  # Оставляем только одну кнопку
+        KeyboardButton("👤 Профиль")
     )
 
 def get_start_button():
-    return InlineKeyboardMarkup().add(InlineKeyboardButton("\u25B6\uFE0F Продолжить", callback_data="start_registration"))
+    return InlineKeyboardMarkup().add(InlineKeyboardButton("\u25B6\uFE0F Начать регистрацию", callback_data="start_registration"))
 
 def get_books_keyboard(selected_books=[]):
     books = ["Книга 1", "Книга 2", "Книга 3", "Книга 4"]
@@ -153,7 +155,7 @@ async def start(message: types.Message):
                 reply_markup=get_start_button()
             )
     except Exception as e:
-        logging.error(f"Ошибка в /start: {e}")
+        logger.error(f"Ошибка в /start: {e}")
         await message.answer("❌ Произошла ошибка. Попробуйте позже.")
 
 @dp.callback_query_handler(lambda c: c.data == "start_registration")
@@ -261,7 +263,7 @@ async def receive_payment(message: types.Message, state: FSMContext):
                 await bot.send_message(admin_id, caption + f"\n\n📄 Текст:\n{message.text}", reply_markup=get_confirmation_buttons(message.from_user.id))
         await message.reply("🧾 Спасибо! Мы передали данные администратору. ⏳ Ожидайте решения.")
     except Exception as e:
-        logging.error(f"Ошибка при отправке чека админу: {e}")
+        logger.error(f"Ошибка при отправке чека админу: {e}")
         await message.reply("❌ Ошибка при отправке чека. Попробуйте снова.")
     await state.finish()
 
@@ -303,7 +305,14 @@ async def profile_info(message: types.Message):
         text = format_user_info(email, telegram, books, trial_end, payment_due, paid, confirmed) + "\n\nВы можете продлить подписку ниже:"
         await message.answer(text, reply_markup=get_profile_buttons(email), parse_mode="Markdown")
     else:
-        await message.answer("❗️ Вы ещё не зарегистрированы.")
+        await message.answer(
+            "👋 *Вы ещё не зарегистрированы в Wordzen!*\n\n"
+            "Чтобы начать пользоваться ботом и получить 3 дня бесплатного доступа, нажмите кнопку ниже:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("\u25B6\uFE0F Зарегистрироваться", callback_data="start_registration")
+            )
+        )
 
 @dp.callback_query_handler(lambda c: c.data.startswith("extend_subscription_"))
 async def extend_subscription(callback_query: types.CallbackQuery, state: FSMContext):
@@ -346,13 +355,25 @@ async def check_payments():
             try:
                 await bot.send_message(telegram, f"⏳ Завтра заканчивается ваш пробный период в Wordzen. Оплатите подписку: {CARD_NUMBER}")
             except Exception as e:
-                logging.error(f"Ошибка уведомления {telegram}: {e}")
+                logger.error(f"Ошибка уведомления {telegram}: {e}")
         await asyncio.sleep(86400)
+
+# Проверка и очистка webhook'ов перед запуском
+async def on_startup(_):
+    logger.info("Запуск бота...")
+    webhook_info = await bot.get_webhook_info()
+    if webhook_info.url:
+        logger.info(f"Обнаружен активный webhook: {webhook_info.url}. Удаляем его...")
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook удалён.")
+    else:
+        logger.info("Webhook не обнаружен, продолжаем с polling.")
+    logger.info("Бот успешно запущен.")
 
 # Запуск
 if __name__ == "__main__":
     keep_alive()
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(bot.delete_webhook(drop_pending_updates=True))
+    loop.run_until_complete(on_startup(dp))
     loop.create_task(check_payments())
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
