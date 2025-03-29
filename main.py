@@ -425,8 +425,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     loop = asyncio.get_event_loop()
-
-    # 💡 ВАЖНО: удаляем старые вебхуки, если были
     loop.run_until_complete(bot.delete_webhook(drop_pending_updates=True))
 
     loop.create_task(check_payments())
