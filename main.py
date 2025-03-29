@@ -9,7 +9,8 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from keep_alive import keep_alive
-
+from aiogram import executor
+    executor.start_polling(dp, skip_updates=True)
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
