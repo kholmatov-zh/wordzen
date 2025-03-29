@@ -34,6 +34,7 @@ class Database:
     def _create_table(self):
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE,
             email TEXT UNIQUE,
             telegram TEXT,
             books TEXT,
@@ -44,16 +45,17 @@ class Database:
         )''')
         self.conn.commit()
 
-    def add_user(self, email, telegram, books):
+    def add_user(self, user_id, email, telegram, books):
         trial_end = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d')
         self.cursor.execute(
-            "INSERT OR IGNORE INTO users (email, telegram, books, trial_end, payment_due) VALUES (?, ?, ?, ?, ?)",
-            (email, telegram, books, trial_end, trial_end)
+            "INSERT OR IGNORE INTO users (user_id, email, telegram, books, trial_end, payment_due) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, email, telegram, books, trial_end, trial_end)
         )
         self.conn.commit()
+        logger.info(f"Добавлен пользователь: user_id={user_id}, email={email}, telegram={telegram}, books={books}")
 
-    def get_user(self, telegram):
-        self.cursor.execute("SELECT * FROM users WHERE telegram = ?", (telegram,))
+    def get_user(self, user_id):
+        self.cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         return self.cursor.fetchone()
 
     def update_payment(self, email, months, bonus=0):
@@ -73,7 +75,7 @@ class Database:
         return self.cursor.fetchall()
 
     def get_all_users(self):
-        self.cursor.execute("SELECT email, telegram, trial_end, paid_months, payment_confirmed FROM users")
+        self.cursor.execute("SELECT user_id, email, telegram, trial_end, paid_months, payment_confirmed FROM users")
         return self.cursor.fetchall()
 
 db = Database()
@@ -115,9 +117,10 @@ def get_profile_buttons(email):
     )
 
 # Вспомогательные функции
-def format_user_info(email, telegram, books, trial_end, payment_due, paid, confirmed):
+def format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed):
     return (
         f"👤 *Ваш профиль:*\n"
+        f"🆔 User ID: `{user_id}`\n"
         f"📧 Email: `{email}`\n"
         f"👤 Telegram: `{telegram}`\n"
         f"📚 Книги: {books or 'не выбрано'}\n"
@@ -167,12 +170,12 @@ async def start_registration(callback_query: types.CallbackQuery):
 @dp.message_handler(state=UserState.email)
 async def get_email(message: types.Message, state: FSMContext):
     await state.update_data(email=message.text)
-    await message.answer("Отправьте ссылку на ваш Telegram-аккаунт:")
+    await message.answer("Отправьте ссылку на ваш Telegram-аккаунт (например, @username):")
     await UserState.telegram.set()
 
 @dp.message_handler(state=UserState.telegram)
 async def get_telegram(message: types.Message, state: FSMContext):
-    await state.update_data(telegram=message.text)
+    await state.update_data(telegram=message.text, user_id=message.from_user.id)
     await state.update_data(books=[])
     await message.answer("\U0001F4DA Вот список книг. Выберите до 3 штук:", reply_markup=get_books_keyboard())
     await UserState.books.set()
@@ -205,10 +208,11 @@ async def choose_books(callback_query: types.CallbackQuery, state: FSMContext):
 @dp.callback_query_handler(lambda c: c.data == "confirm_books", state=UserState.books)
 async def confirm_books(callback_query: types.CallbackQuery, state: FSMContext):
     user_data = await state.get_data()
+    user_id = user_data["user_id"]
     email = user_data["email"]
     telegram = user_data["telegram"]
     books = ", ".join(user_data.get("books", []))
-    db.add_user(email, telegram, books)
+    db.add_user(user_id, email, telegram, books)
 
     text = (
         f"📝 *Ваша регистрация завершена!* 🎉\n\n"
@@ -232,10 +236,10 @@ async def show_tariffs(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data.startswith("pay_"))
 async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
     months = int(callback_query.data.split("_")[1])
-    telegram = f"https://t.me/{callback_query.from_user.username}" if callback_query.from_user.username else callback_query.from_user.full_name
-    user = db.get_user(telegram)
+    user_id = callback_query.from_user.id
+    user = db.get_user(user_id)
     if user:
-        await state.update_data(email=user[1], months=months)
+        await state.update_data(email=user[2], months=months)
         await callback_query.message.answer(
             f"💳 Вы выбрали тариф: *{months} мес.*\n"
             f"Номер карты: `{CARD_NUMBER}`\n\n"
@@ -270,13 +274,12 @@ async def receive_payment(message: types.Message, state: FSMContext):
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_approve_"))
 async def confirm_payment(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = int(callback_query.data.split("_")[-1])
-    telegram = f"https://t.me/{callback_query.from_user.username}" if callback_query.from_user.username else callback_query.from_user.full_name
-    user = db.get_user(telegram)
+    user = db.get_user(user_id)
     if not user:
         await callback_query.answer("Пользователь не найден.")
         return
 
-    email = user[1]
+    email = user[2]
     user_data = await state.get_data()
     months = user_data.get("months", 1)
     bonus = calculate_bonus(months)
@@ -288,7 +291,7 @@ async def confirm_payment(callback_query: types.CallbackQuery, state: FSMContext
         "✅ Добро пожаловать! Используйте кнопку снизу для доступа к профилю.",
         reply_markup=get_main_menu()
     )
-    await bot.send_message(telegram, f"🎉 Поздравляем! Вы приобрели доступ на {months} месяцев и получили +{bonus} месяцев в подарок!")
+    await bot.send_message(user_id, f"🎉 Поздравляем! Вы приобрели доступ на {months} месяцев и получили +{bonus} месяцев в подарок!")
 
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_reject_"))
 async def reject_payment(callback_query: types.CallbackQuery):
@@ -298,11 +301,12 @@ async def reject_payment(callback_query: types.CallbackQuery):
 
 @dp.message_handler(lambda message: message.text == "👤 Профиль")
 async def profile_info(message: types.Message):
-    telegram = f"https://t.me/{message.from_user.username}" if message.from_user.username else message.from_user.full_name
-    user = db.get_user(telegram)
+    user_id = message.from_user.id
+    logger.info(f"Поиск пользователя с user_id: {user_id}")
+    user = db.get_user(user_id)
     if user:
-        email, _, books, trial_end, payment_due, paid, confirmed = user
-        text = format_user_info(email, telegram, books, trial_end, payment_due, paid, confirmed) + "\n\nВы можете продлить подписку ниже:"
+        user_id, _, email, telegram, books, trial_end, payment_due, paid, confirmed = user
+        text = format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed) + "\n\nВы можете продлить подписку ниже:"
         await message.answer(text, reply_markup=get_profile_buttons(email), parse_mode="Markdown")
     else:
         await message.answer(
@@ -317,9 +321,9 @@ async def profile_info(message: types.Message):
 @dp.callback_query_handler(lambda c: c.data.startswith("extend_subscription_"))
 async def extend_subscription(callback_query: types.CallbackQuery, state: FSMContext):
     email = callback_query.data.split("_")[-1]
-    telegram = f"https://t.me/{callback_query.from_user.username}" if callback_query.from_user.username else callback_query.from_user.full_name
-    user = db.get_user(telegram)
-    if user and user[1] == email:
+    user_id = callback_query.from_user.id
+    user = db.get_user(user_id)
+    if user and user[2] == email:
         await callback_query.message.edit_text("💳 Выберите тариф для продления:", reply_markup=get_payment_options())
     else:
         await callback_query.message.edit_text("❗ Не удалось найти ваш аккаунт.")
@@ -336,8 +340,8 @@ async def list_users(message: types.Message):
     users = db.get_all_users()
     text = "👥 Список пользователей:\n"
     for user in users:
-        email, telegram, trial_end, paid, confirmed = user
-        text += f"\n📧 {email}\n👤 {telegram}\n⏳ До: {trial_end}\n💰 Месяцев: {paid}\n✅ Оплачен: {'Да' if confirmed else 'Нет'}\n---"
+        user_id, email, telegram, trial_end, paid, confirmed = user
+        text += f"\n🆔 {user_id}\n📧 {email}\n👤 {telegram}\n⏳ До: {trial_end}\n💰 Месяцев: {paid}\n✅ Оплачен: {'Да' if confirmed else 'Нет'}\n---"
     await message.answer(text)
 
 async def check_payments():
