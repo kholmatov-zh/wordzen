@@ -9,8 +9,7 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from keep_alive import keep_alive
-from aiogram import executor
-    executor.start_polling(dp, skip_updates=True)
+
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -424,7 +423,13 @@ async def back_to_menu(callback_query: types.CallbackQuery):
 if __name__ == "__main__":
     keep_alive()
     logging.basicConfig(level=logging.INFO)
+
     loop = asyncio.get_event_loop()
+
+    # 💡 ВАЖНО: удаляем старые вебхуки, если были
+    loop.run_until_complete(bot.delete_webhook(drop_pending_updates=True))
+
     loop.create_task(check_payments())
+
     from aiogram import executor
     executor.start_polling(dp, skip_updates=True)
