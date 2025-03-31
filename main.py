@@ -201,16 +201,16 @@ def get_source_keyboard():
         InlineKeyboardButton("Ўқитувчидан", callback_data="source_teacher")
     )
 
-def get_payment_options(user_id):
+def get_payment_options(user_id, promo_code=None):
+    price = "49.900 сўм" if promo_code else "59.900 сўм"
     return InlineKeyboardMarkup(row_width=1).add(
-        InlineKeyboardButton("📅 1 ой — 100 сўм", callback_data=f"pay_1_{user_id}"),
-        InlineKeyboardButton("📅 3 ой — 300 сўм +1 ой 🎁", callback_data=f"pay_3_{user_id}")
+        InlineKeyboardButton(f"📅 1 ой — {price}", callback_data=f"pay_1_{user_id}")
     )
 
 def get_confirmation_buttons(user_id):
     return InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton("✅ Тасдиқлаш (1 ой)", callback_data=f"payment_approve_{user_id}_1"),
-        InlineKeyboardButton("✅ Тасдиқлаш (3 ой)", callback_data=f"payment_approve_{user_id}_3"),
+        InlineKeyboardButton("✅ Тасдиқлаш", callback_data=f"payment_approve_{user_id}_0"),
+        InlineKeyboardButton("✅ Тасдиқлаш (+1 ой бонус)", callback_data=f"payment_approve_{user_id}_1"),
         InlineKeyboardButton("❌ Рад этиш", callback_data=f"payment_reject_{user_id}")
     )
 
@@ -242,9 +242,6 @@ def format_user_info(user_id, source, email, telegram, books, trial_end, payment
         f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}\n"
         f"🔄 Активлик: {'Фаол' if is_active else 'Ўчирилган'}"
     )
-
-def calculate_bonus(months):
-    return 1 if months == 3 else 0
 
 # Состояния
 class UserState(StatesGroup):
@@ -291,7 +288,7 @@ async def start_registration(callback_query: types.CallbackQuery):
         await callback_query.message.answer(
             "❌ Сизнинг обунангиз муддати тугади ва сиз ўчирилдингиз.\n"
             "Яна фойдаланиш учун тўлов қилинг ва чекни юборинг.",
-            reply_markup=get_payment_options(callback_query.from_user.id)
+            reply_markup=get_payment_options(callback_query.from_user.id, user[10])
         )
         await UserState.payment.set()
         await callback_query.message.answer("💳 Тарифни танланг:")
@@ -367,6 +364,7 @@ async def choose_books(message: types.Message, state: FSMContext):
     trial_end = user[6]  # trial_end из базы
 
     # Уведомление пользователю
+    price = "49.900 сўм" if promo_code else "59.900 сўм"
     text = (
         f"📝 *Рўйхатдан ўтиш муваффақиятли якунланди!* 🎉\n\n"
         f"📡 Бизни қаердан топдингиз: {source}\n"
@@ -375,9 +373,9 @@ async def choose_books(message: types.Message, state: FSMContext):
         f"📚 Китоблар: {books}\n"
         f"⏳ Синов муддати: *{trial_end}*\n"
         f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}\n\n"
-        f"💳 Фойдаланишни давом эттириш учун тўлов қилинг."
+        f"💳 Фойдаланишни давом эттириш учун тўлов қилинг ({price})."
     )
-    await message.answer(text, reply_markup=get_payment_options(user_id), parse_mode="Markdown")
+    await message.answer(text, reply_markup=get_payment_options(user_id, promo_code), parse_mode="Markdown")
 
     # Уведомление админам
     admin_text = (
@@ -404,8 +402,9 @@ async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
     if user:
         logger.info(f"Начало оплаты: user_id={user_id}, months={months}")
         await state.update_data(user_id=user_id, months=months, email=user[3])
+        price = "49.900 сўм" if user[10] else "59.900 сўм"
         await callback_query.message.answer(
-            f"💳 Сиз танлаган тариф: *{months} ой*\n"
+            f"💳 Сиз танлаган тариф: *{months} ой* ({price})\n"
             f"Карта рақами: `{CARD_NUMBER}`\n\n"
             f"📸 Тўловдан сўнг чекни бу ерга юборинг (фото, документ ёки матн). Текшириш — 30 дақиқа ичида.",
             parse_mode="Markdown"
@@ -430,12 +429,13 @@ async def receive_payment(message: types.Message, state: FSMContext):
     user = db.get_user(user_id)
     promo_code = user[10] if user else None
     telegram = f"https://t.me/{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    price = "49.900 сўм" if promo_code else "59.900 сўм"
     caption = (
         f"📥 Янги тўлов текшириш учун:\n\n"
         f"🆔 Фойдаланувчи ID: {user_id}\n"
         f"📧 Email: {obfuscate_email(email)}\n"
         f"👤 Telegram: {telegram}\n"
-        f"📅 Танланган тариф: {months} ой\n"
+        f"📅 Танланган тариф: {months} ой ({price})\n"
         f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}"
     )
 
@@ -464,7 +464,7 @@ async def confirm_payment(callback_query: types.CallbackQuery):
         return
 
     user_id = int(parts[2])
-    months = int(parts[3])
+    bonus = int(parts[3])
     user = db.get_user(user_id)
     if not user:
         logger.error(f"Пользователь с user_id={user_id} не найден")
@@ -473,18 +473,18 @@ async def confirm_payment(callback_query: types.CallbackQuery):
 
     email = user[3]
     promo_code = user[10]
-    bonus = calculate_bonus(months)
+    months = 1  # Только 1 месяц
     db.update_payment(user_id, months, bonus)
 
     if callback_query.message.text:
         await callback_query.message.edit_text(
-            f"✅ {obfuscate_email(email)} учун тўлов тасдиқланди. Қўшилди: {months} ой + {bonus} ой 🎁\n"
+            f"✅ {obfuscate_email(email)} учун тўлов тасдиқланди. Қўшилди: {months} ой + {bonus} ой бонус\n"
             f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}"
         )
     else:
         await bot.send_message(
             callback_query.message.chat.id,
-            f"✅ {obfuscate_email(email)} учун тўлов тасдиқланди. Қўшилди: {months} ой + {bonus} ой 🎁\n"
+            f"✅ {obfuscate_email(email)} учун тўлов тасдиқланди. Қўшилди: {months} ой + {bonus} ой бонус\n"
             f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}"
         )
         await callback_query.message.delete()
@@ -494,7 +494,7 @@ async def confirm_payment(callback_query: types.CallbackQuery):
         "✅ Хуш келибсиз! Профилингизга ўтиш учун қуйидаги тугмани босинг.",
         reply_markup=get_main_menu()
     )
-    await bot.send_message(user_id, f"🎉 Табриклаймиз! Сиз {months} ойга обуна харид қилдингиз ва +{bonus} ой бонус оласиз!")
+    await bot.send_message(user_id, f"🎉 Табриклаймиз! Сиз {months} ойга обуна харид қилдингиз ва {bonus} ой бонус оласиз!")
     logger.info(f"Оплата подтверждена: user_id={user_id}, months={months}, bonus={bonus}")
 
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_reject_"))
@@ -516,7 +516,7 @@ async def profile_info(message: types.Message):
             await message.answer(
                 "❌ Сизнинг обунангиз муддати тугади ва сиз ўчирилдингиз.\n"
                 "Яна фойдаланиш учун тўлов қилинг ва чекни юборинг.",
-                reply_markup=get_payment_options(user_id)
+                reply_markup=get_payment_options(user_id, promo_code)
             )
             await UserState.payment.set()
             await message.answer("💳 Тарифни танланг:")
@@ -539,7 +539,7 @@ async def extend_subscription(callback_query: types.CallbackQuery, state: FSMCon
     user_id = callback_query.from_user.id
     user = db.get_user(user_id)
     if user and user[3] == email:
-        await callback_query.message.edit_text("💳 Обунани узайтириш учун тарифни танланг:", reply_markup=get_payment_options(user_id))
+        await callback_query.message.edit_text("💳 Обунани узайтириш учун тарифни танланг:", reply_markup=get_payment_options(user_id, user[10]))
     else:
         await callback_query.message.edit_text("❗ Сизнинг аккаунтингиз топилмади.")
 
@@ -698,6 +698,7 @@ async def reset_books_user(callback_query: types.CallbackQuery, state: FSMContex
 async def choose_new_books(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     user_id = user_data["user_id"]
+    user = db.get_user(user_id)
     try:
         book_indices = [int(i.strip()) - 1 for i in message.text.split("\n") if i.strip().isdigit()]
         if len(book_indices) != 3:
@@ -709,7 +710,7 @@ async def choose_new_books(message: types.Message, state: FSMContext):
         books = ", ".join(BOOKS[i] for i in book_indices)
         db.cursor.execute("UPDATE users SET books = %s WHERE user_id = %s", (books, user_id))
         db.conn.commit()
-        await message.answer("✅ Янги китоблар танланди. Тўлов қилинг:", reply_markup=get_payment_options(user_id))
+        await message.answer("✅ Янги китоблар танланди. Тўлов қилинг:", reply_markup=get_payment_options(user_id, user[10]))
         await UserState.payment.set()
         await message.answer("💳 Тарифни танланг:")
     except ValueError:
@@ -727,7 +728,7 @@ async def check_payments():
             for admin_id in ADMIN_IDS:
                 await bot.send_message(admin_id, f"❗ Фойдаланувчи ўчирилди (тўлов қилмади):\nEmail: {obfuscate_email(email)}\nTelegram: {telegram}")
             try:
-                await bot.send_message(user_id, "❌ Сизнинг обунангиз муддати тугади ва сиз ўчирилдингиз.\nЯна фойдаланиш учун тўлов қилинг ва чекни юборинг.", reply_markup=get_payment_options(user_id))
+                await bot.send_message(user_id, "❌ Сизнинг обунангиз муддати тугади ва сиз ўчирилдингиз.\nЯна фойдаланиш учун тўлов қилинг ва чекни юборинг.", reply_markup=get_payment_options(user_id, db.get_user(user_id)[10]))
             except Exception as e:
                 logger.error(f"Ошибка уведомления {user_id}: {e}")
 
@@ -736,7 +737,7 @@ async def check_payments():
             for admin_id in ADMIN_IDS:
                 await bot.send_message(admin_id, f"⏰ Эртага синов муддати тугайди:\nEmail: {obfuscate_email(email)}\nTelegram: {telegram}")
             try:
-                await bot.send_message(user_id, f"⏳ Эртага Wordzen'да синов муддати тугайди. Обунани узайтириш учун тўлов қилинг:", reply_markup=get_payment_options(user_id))
+                await bot.send_message(user_id, f"⏳ Эртага Wordzen'да синов муддати тугайди. Обунани узайтириш учун тўлов қилинг:", reply_markup=get_payment_options(user_id, db.get_user(user_id)[10]))
             except Exception as e:
                 logger.error(f"Ошибка уведомления {user_id}: {e}")
 
