@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+import random
+import string
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -8,7 +10,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from keep_alive import keep_alive
-import sqlite3
+import psycopg2
 
 # Конфигурация логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,38 +26,53 @@ CARD_NUMBER = "1234 5678 9012 3456"
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# SQLite база данных
+# PostgreSQL база данных через Supabase
 class Database:
-    def __init__(self, db_name="users.db"):
-        self.conn = sqlite3.connect(db_name, check_same_thread=False)
+    def __init__(self):
+        self.conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         self.cursor = self.conn.cursor()
-        self._create_table()
+        logger.info("Подключение к базе данных PostgreSQL")
+        self._create_tables()
 
-    def _create_table(self):
+    def _create_tables(self):
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER UNIQUE,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT UNIQUE,
             email TEXT UNIQUE,
             telegram TEXT,
             books TEXT,
             trial_end TEXT,
             payment_due TEXT,
             paid_months INTEGER DEFAULT 0,
-            payment_confirmed INTEGER DEFAULT 0
+            payment_confirmed INTEGER DEFAULT 0,
+            promo_code TEXT
+        )''')
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS promo_codes (
+            code TEXT PRIMARY KEY,
+            usage_limit INTEGER DEFAULT 5,
+            used_count INTEGER DEFAULT 0,
+            bonus_days INTEGER DEFAULT 7
         )''')
         self.conn.commit()
+        logger.info("Таблицы созданы или уже существуют")
 
-    def add_user(self, user_id, email, telegram, books):
+    def add_user(self, user_id, email, telegram, books, promo_code=None):
         trial_end = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d')
+        if promo_code:
+            promo = self.get_promo_code(promo_code)
+            if promo and promo[2] < promo[1]:  # used_count < usage_limit
+                bonus_days = promo[3]
+                trial_end = (datetime.now() + timedelta(days=3 + bonus_days)).strftime('%Y-%m-%d')
+                self.cursor.execute("UPDATE promo_codes SET used_count = used_count + 1 WHERE code = %s", (promo_code,))
         self.cursor.execute(
-            "INSERT OR IGNORE INTO users (user_id, email, telegram, books, trial_end, payment_due) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, email, telegram, books, trial_end, trial_end)
+            "INSERT INTO users (user_id, email, telegram, books, trial_end, payment_due, promo_code) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id) DO NOTHING",
+            (user_id, email, telegram, books, trial_end, trial_end, promo_code)
         )
         self.conn.commit()
-        logger.info(f"Добавлен пользователь: user_id={user_id}, email={email}, telegram={telegram}, books={books}")
+        logger.info(f"Добавлен пользователь: user_id={user_id}, email={email}, promo_code={promo_code}")
 
     def get_user(self, user_id):
-        self.cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        self.cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
         result = self.cursor.fetchone()
         logger.info(f"Поиск пользователя: user_id={user_id}, результат={result}")
         return result
@@ -63,22 +80,37 @@ class Database:
     def update_payment(self, user_id, months, bonus=0):
         total = months + bonus
         self.cursor.execute(
-            "UPDATE users SET paid_months = paid_months + ?, payment_confirmed = 1, payment_due = ? WHERE user_id = ?",
+            "UPDATE users SET paid_months = paid_months + %s, payment_confirmed = 1, payment_due = %s WHERE user_id = %s",
             (total, (datetime.now() + timedelta(days=30 * total)).strftime('%Y-%m-%d'), user_id)
         )
         self.conn.commit()
         logger.info(f"Обновлена оплата: user_id={user_id}, months={months}, bonus={bonus}")
 
+    def get_promo_code(self, code):
+        self.cursor.execute("SELECT code, usage_limit, used_count, bonus_days FROM promo_codes WHERE code = %s", (code,))
+        return self.cursor.fetchone()
+
+    def add_promo_code(self, code, usage_limit=5, bonus_days=7):
+        self.cursor.execute(
+            "INSERT INTO promo_codes (code, usage_limit, used_count, bonus_days) VALUES (%s, %s, 0, %s) ON CONFLICT (code) DO NOTHING",
+            (code, usage_limit, bonus_days)
+        )
+        self.conn.commit()
+
+    def get_promo_stats(self):
+        self.cursor.execute("SELECT code, usage_limit, used_count, bonus_days FROM promo_codes")
+        return self.cursor.fetchall()
+
     def get_unpaid_users(self, date):
-        self.cursor.execute("SELECT email, telegram FROM users WHERE payment_due = ? AND payment_confirmed = 0", (date,))
+        self.cursor.execute("SELECT email, telegram FROM users WHERE payment_due = %s AND payment_confirmed = 0", (date,))
         return self.cursor.fetchall()
 
     def get_users_near_trial_end(self, date):
-        self.cursor.execute("SELECT email, telegram FROM users WHERE trial_end = ? AND payment_confirmed = 0", (date,))
+        self.cursor.execute("SELECT email, telegram FROM users WHERE trial_end = %s AND payment_confirmed = 0", (date,))
         return self.cursor.fetchall()
 
     def get_all_users(self):
-        self.cursor.execute("SELECT user_id, email, telegram, trial_end, paid_months, payment_confirmed FROM users")
+        self.cursor.execute("SELECT user_id, email, telegram, trial_end, paid_months, payment_confirmed, promo_code FROM users")
         return self.cursor.fetchall()
 
 db = Database()
@@ -134,7 +166,7 @@ def get_profile_buttons(email):
     )
 
 # Вспомогательные функции
-def format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed):
+def format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed, promo_code):
     obfuscated_email = obfuscate_email(email)
     return (
         f"👤 *Ваш профиль:*\n"
@@ -145,7 +177,8 @@ def format_user_info(user_id, email, telegram, books, trial_end, payment_due, pa
         f"⏳ Пробный доступ до: *{trial_end}*\n"
         f"⏳ Подписка активна до: *{payment_due}*\n"
         f"💰 Оплачено месяцев: {paid}\n"
-        f"✅ Статус: {'Оплачено' if confirmed else 'Пробный/не оплачен'}"
+        f"✅ Статус: {'Оплачено' if confirmed else 'Пробный/не оплачен'}\n"
+        f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}"
     )
 
 def calculate_bonus(months):
@@ -155,6 +188,7 @@ def calculate_bonus(months):
 class UserState(StatesGroup):
     email = State()
     telegram = State()
+    promo = State()
     books = State()
     payment = State()
 
@@ -194,6 +228,21 @@ async def get_email(message: types.Message, state: FSMContext):
 @dp.message_handler(state=UserState.telegram)
 async def get_telegram(message: types.Message, state: FSMContext):
     await state.update_data(telegram=message.text, user_id=message.from_user.id)
+    await message.answer("У вас есть промокод? Введите его или напишите 'нет':")
+    await UserState.promo.set()
+
+@dp.message_handler(state=UserState.promo)
+async def get_promo(message: types.Message, state: FSMContext):
+    promo_code = message.text.strip().upper() if message.text.lower() != 'нет' else None
+    if promo_code:
+        promo = db.get_promo_code(promo_code)
+        if not promo:
+            await message.answer("❌ Промокод не найден. Попробуйте снова или напишите 'нет':")
+            return
+        if promo[2] >= promo[1]:
+            await message.answer("❌ Этот промокод уже использован максимальное количество раз. Введите другой или напишите 'нет':")
+            return
+    await state.update_data(promo_code=promo_code)
     await state.update_data(books=[])
     await message.answer("\U0001F4DA Вот список книг. Выберите до 3 штук:", reply_markup=get_books_keyboard())
     await UserState.books.set()
@@ -230,14 +279,18 @@ async def confirm_books(callback_query: types.CallbackQuery, state: FSMContext):
     email = user_data["email"]
     telegram = user_data["telegram"]
     books = ", ".join(user_data.get("books", []))
-    db.add_user(user_id, email, telegram, books)
+    promo_code = user_data.get("promo_code")
+    db.add_user(user_id, email, telegram, books, promo_code)
 
+    user = db.get_user(user_id)
+    trial_end = user[5]  # trial_end из базы
     text = (
         f"📝 *Ваша регистрация завершена!* 🎉\n\n"
         f"📧 Email: `{obfuscate_email(email)}`\n"
         f"👤 Telegram: `{telegram}`\n"
         f"📚 Книги: {books or 'не выбрано'}\n"
-        f"⏳ Пробный доступ до: *{(datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d')}*\n\n"
+        f"⏳ Пробный доступ до: *{trial_end}*\n"
+        f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}\n\n"
         f"💳 Чтобы сохранить доступ, нажмите кнопку оплатить ниже и отправьте чек об оплате."
     )
     buttons = InlineKeyboardMarkup().add(
@@ -261,7 +314,7 @@ async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
     user = db.get_user(user_id)
     if user:
         logger.info(f"Начало оплаты: user_id={user_id}, months={months}")
-        await state.update_data(user_id=user_id, months=months, email=user[2])  # Email из базы
+        await state.update_data(user_id=user_id, months=months, email=user[2])
         await callback_query.message.answer(
             f"💳 Вы выбрали тариф: *{months} мес.*\n"
             f"Номер карты: `{CARD_NUMBER}`\n\n"
@@ -285,8 +338,17 @@ async def receive_payment(message: types.Message, state: FSMContext):
         await state.finish()
         return
 
+    user = db.get_user(user_id)
+    promo_code = user[9] if user else None
     telegram = f"https://t.me/{message.from_user.username}" if message.from_user.username else message.from_user.full_name
-    caption = f"📥 Новый платёж на проверку:\n\n🆔 User ID: {user_id}\n📧 Email: {obfuscate_email(email)}\n👤 Telegram: {telegram}\n📅 Выбранный тариф: {months} мес"
+    caption = (
+        f"📥 Новый платёж на проверку:\n\n"
+        f"🆔 User ID: {user_id}\n"
+        f"📧 Email: {obfuscate_email(email)}\n"
+        f"👤 Telegram: {telegram}\n"
+        f"📅 Выбранный тариф: {months} мес\n"
+        f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}"
+    )
 
     try:
         for admin_id in ADMIN_IDS:
@@ -302,6 +364,7 @@ async def receive_payment(message: types.Message, state: FSMContext):
         logger.error(f"Ошибка при отправке чека админу: {e}")
         await message.reply("❌ Ошибка при отправке чека. Попробуйте снова.")
     await state.finish()
+
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_approve_"))
 async def confirm_payment(callback_query: types.CallbackQuery):
     logger.info(f"Получен callback: {callback_query.data}")
@@ -315,24 +378,28 @@ async def confirm_payment(callback_query: types.CallbackQuery):
     months = int(parts[3])
     user = db.get_user(user_id)
     if not user:
-        logger.error(f"Пользователь с user_id={user_id} не найден")
+        logger.error(f"Iользователь с user_id={user_id} не найден")
         await callback_query.answer("❌ Пользователь не найден.")
         return
 
     email = user[2]
+    promo_code = user[9]
     bonus = calculate_bonus(months)
     db.update_payment(user_id, months, bonus)
 
-    # Проверяем тип сообщения и действуем соответственно
     if callback_query.message.text:
-        # Если есть текст, редактируем его
-        await callback_query.message.edit_text(f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁")
+        await callback_query.message.edit_text(
+            f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁\n"
+            f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}"
+        )
     else:
-        # Если это фото или документ, отправляем новое сообщение и удаляем старое
-        await bot.send_message(callback_query.message.chat.id, f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁")
+        await bot.send_message(
+            callback_query.message.chat.id,
+            f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁\n"
+            f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}"
+        )
         await callback_query.message.delete()
 
-    # Отправляем уведомления пользователю
     await bot.send_message(
         user_id,
         "✅ Добро пожаловать! Используйте кнопку снизу для доступа к профилю.",
@@ -340,6 +407,7 @@ async def confirm_payment(callback_query: types.CallbackQuery):
     )
     await bot.send_message(user_id, f"🎉 Поздравляем! Вы приобрели доступ на {months} месяцев и получили +{bonus} месяцев в подарок!")
     logger.info(f"Оплата подтверждена: user_id={user_id}, months={months}, bonus={bonus}")
+
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_reject_"))
 async def reject_payment(callback_query: types.CallbackQuery):
     logger.info(f"Получен callback: {callback_query.data}")
@@ -354,8 +422,8 @@ async def profile_info(message: types.Message):
     logger.info(f"Поиск профиля для user_id: {user_id}")
     user = db.get_user(user_id)
     if user:
-        user_id, _, email, telegram, books, trial_end, payment_due, paid, confirmed = user
-        text = format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed) + "\n\nВы можете продлить подписку ниже:"
+        user_id, _, email, telegram, books, trial_end, payment_due, paid, confirmed, promo_code = user
+        text = format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed, promo_code) + "\n\nВы можете продлить подписку ниже:"
         await message.answer(text, reply_markup=get_profile_buttons(email), parse_mode="Markdown")
     else:
         await message.answer(
@@ -389,8 +457,31 @@ async def list_users(message: types.Message):
     users = db.get_all_users()
     text = "👥 Список пользователей:\n"
     for user in users:
-        user_id, email, telegram, trial_end, paid, confirmed = user
-        text += f"\n🆔 {user_id}\n📧 {obfuscate_email(email)}\n👤 {telegram}\n⏳ До: {trial_end}\n💰 Месяцев: {paid}\n✅ Оплачен: {'Да' if confirmed else 'Нет'}\n---"
+        user_id, email, telegram, trial_end, paid, confirmed, promo_code = user
+        text += f"\n🆔 {user_id}\n📧 {obfuscate_email(email)}\n👤 {telegram}\n⏳ До: {trial_end}\n💰 Месяцев: {paid}\n✅ Оплачен: {'Да' if confirmed else 'Нет'}\n🎟️ Промокод: {promo_code if promo_code else 'не использован'}\n---"
+    await message.answer(text)
+
+@dp.message_handler(commands=["generate_promo"])
+async def generate_promo(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    db.add_promo_code(code)
+    await message.answer(f"✅ Новый промокод сгенерирован: `{code}`\nДействует 5 раз, даёт 7 дней бонуса.")
+
+@dp.message_handler(commands=["promo_stats"])
+async def promo_stats(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+    stats = db.get_promo_stats()
+    if not stats:
+        await message.answer("📊 Промокодов пока нет.")
+        return
+    text = "📊 Статистика промокодов:\n"
+    for code, limit, used, days in stats:
+        text += f"\nКод: `{code}`\nЛимит: {limit}\nИспользовано: {used}\nБонус: {days} дней\n---"
     await message.answer(text)
 
 async def check_payments():
