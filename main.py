@@ -113,6 +113,25 @@ class Database:
         self.cursor.execute("SELECT user_id, email, telegram, trial_end, paid_months, payment_confirmed, promo_code FROM users")
         return self.cursor.fetchall()
 
+    def delete_user(self, user_id):
+        self.cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+        self.conn.commit()
+        logger.info(f"Пользователь удалён: user_id={user_id}")
+
+    def reset_promo_code(self, code):
+        self.cursor.execute("UPDATE promo_codes SET used_count = 0 WHERE code = %s", (code,))
+        self.conn.commit()
+        logger.info(f"Счётчик промокода сброшен: code={code}")
+
+    def get_stats(self):
+        self.cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = self.cursor.fetchone()[0]
+        self.cursor.execute("SELECT COUNT(*) FROM users WHERE payment_confirmed = 1")
+        paid_users = self.cursor.fetchone()[0]
+        self.cursor.execute("SELECT COUNT(*) FROM users WHERE promo_code IS NOT NULL")
+        promo_users = self.cursor.fetchone()[0]
+        return total_users, paid_users, promo_users
+
 db = Database()
 
 # Функция для предотвращения распознавания email как ссылки
@@ -131,54 +150,54 @@ def obfuscate_email(email):
 # Клавиатуры
 def get_main_menu():
     return ReplyKeyboardMarkup(resize_keyboard=True).add(
-        KeyboardButton("👤 Профиль")
+        KeyboardButton("👤 Профилим")
     )
 
 def get_start_button():
-    return InlineKeyboardMarkup().add(InlineKeyboardButton("\u25B6\uFE0F Начать регистрацию", callback_data="start_registration"))
+    return InlineKeyboardMarkup().add(InlineKeyboardButton("\u25B6\uFE0F Рўйхатдан ўтиш", callback_data="start_registration"))
 
 def get_books_keyboard(selected_books=[]):
-    books = ["Книга 1", "Книга 2", "Книга 3", "Книга 4"]
+    books = ["Китоб 1", "Китоб 2", "Китоб 3", "Китоб 4"]
     markup = InlineKeyboardMarkup(row_width=2)
     for book in books:
         prefix = "\u2705 " if book in selected_books else ""
         markup.add(InlineKeyboardButton(prefix + book, callback_data=f"book_{book}"))
-    markup.add(InlineKeyboardButton("\U0001F4E6 Готово", callback_data="confirm_books"))
+    markup.add(InlineKeyboardButton("\U0001F4E6 Тайёр", callback_data="confirm_books"))
     return markup
 
 def get_payment_options(user_id):
     return InlineKeyboardMarkup(row_width=1).add(
-        InlineKeyboardButton("📅 1 месяц — 100₽", callback_data=f"pay_1_{user_id}"),
-        InlineKeyboardButton("📅 3 месяца — 300₽ +1 мес 🎁", callback_data=f"pay_3_{user_id}")
+        InlineKeyboardButton("📅 1 ой — 100 сўм", callback_data=f"pay_1_{user_id}"),
+        InlineKeyboardButton("📅 3 ой — 300 сўм +1 ой 🎁", callback_data=f"pay_3_{user_id}")
     )
 
 def get_confirmation_buttons(user_id):
     return InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton("✅ Подтвердить (1 мес)", callback_data=f"payment_approve_{user_id}_1"),
-        InlineKeyboardButton("✅ Подтвердить (3 мес)", callback_data=f"payment_approve_{user_id}_3"),
-        InlineKeyboardButton("❌ Отклонить", callback_data=f"payment_reject_{user_id}")
+        InlineKeyboardButton("✅ Тасдиқлаш (1 ой)", callback_data=f"payment_approve_{user_id}_1"),
+        InlineKeyboardButton("✅ Тасдиқлаш (3 ой)", callback_data=f"payment_approve_{user_id}_3"),
+        InlineKeyboardButton("❌ Рад этиш", callback_data=f"payment_reject_{user_id}")
     )
 
 def get_profile_buttons(email):
     return InlineKeyboardMarkup(row_width=1).add(
-        InlineKeyboardButton("💳 Продлить подписку", callback_data=f"extend_subscription_{email}"),
-        InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")
+        InlineKeyboardButton("💳 Обунани узайтириш", callback_data=f"extend_subscription_{email}"),
+        InlineKeyboardButton("🔙 Орқага", callback_data="back_to_menu")
     )
 
 # Вспомогательные функции
 def format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed, promo_code):
     obfuscated_email = obfuscate_email(email)
     return (
-        f"👤 *Ваш профиль:*\n"
-        f"🆔 User ID: `{user_id}`\n"
+        f"👤 *Сизнинг профилингиз:*\n"
+        f"🆔 Фойдаланувчи ID: `{user_id}`\n"
         f"📧 Email: `{obfuscated_email}`\n"
         f"👤 Telegram: `{telegram}`\n"
-        f"📚 Книги: {books or 'не выбрано'}\n"
-        f"⏳ Пробный доступ до: *{trial_end}*\n"
-        f"⏳ Подписка активна до: *{payment_due}*\n"
-        f"💰 Оплачено месяцев: {paid}\n"
-        f"✅ Статус: {'Оплачено' if confirmed else 'Пробный/не оплачен'}\n"
-        f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}"
+        f"📚 Китоблар: {books or 'танланмаган'}\n"
+        f"⏳ Синов муддати: *{trial_end}*\n"
+        f"⏳ Обуна муддати: *{payment_due}*\n"
+        f"💰 Тўланган ойлар: {paid}\n"
+        f"✅ Ҳолат: {'Тўланган' if confirmed else 'Синов/тўланмаган'}\n"
+        f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}"
     )
 
 def calculate_bonus(months):
@@ -201,50 +220,50 @@ async def start(message: types.Message):
                 message.chat.id,
                 photo=photo,
                 caption=(
-                    "\U0001F4DA *Добро пожаловать в Wordzen!*\n\n"
-                    "Здесь ты получишь доступ к тщательно отобранным книгам.\n\n"
-                    "\U0001F381 *3 дня бесплатного доступа для новых пользователей!*\n\n"
-                    "Нажми кнопку ниже, чтобы начать \U0001F447"
+                    "\U0001F4DA *Wordzen'га хуш келибсиз!*\n\n"
+                    "Бу ерда сиз танланган китобларга эга бўласиз.\n\n"
+                    "\U0001F381 *Янги фойдаланувчилар учун 3 кунлик бепул муддат!*\n\n"
+                    "Рўйхатдан ўтиш учун қуйидаги тугмани босинг \U0001F447"
                 ),
                 parse_mode="Markdown",
                 reply_markup=get_start_button()
             )
     except Exception as e:
         logger.error(f"Ошибка в /start: {e}")
-        await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+        await message.answer("❌ Хатолик юз берди. Кейинроқ уриниб кўринг.")
 
 @dp.callback_query_handler(lambda c: c.data == "start_registration")
 async def start_registration(callback_query: types.CallbackQuery):
     await callback_query.message.delete()
-    await callback_query.message.answer("\U0001F4E7 Введите ваш email:")
+    await callback_query.message.answer("\U0001F4E7 Email манзилингизни киритинг:")
     await UserState.email.set()
 
 @dp.message_handler(state=UserState.email)
 async def get_email(message: types.Message, state: FSMContext):
     await state.update_data(email=message.text)
-    await message.answer("Отправьте ссылку на ваш Telegram-аккаунт (например, @username):")
+    await message.answer("Telegram аккаунтингиз линкни юборинг (масалан, @username):")
     await UserState.telegram.set()
 
 @dp.message_handler(state=UserState.telegram)
 async def get_telegram(message: types.Message, state: FSMContext):
     await state.update_data(telegram=message.text, user_id=message.from_user.id)
-    await message.answer("У вас есть промокод? Введите его или напишите 'нет':")
+    await message.answer("Сизда промокод борми? Уни киритинг ёки 'йўқ' деб ёзинг:")
     await UserState.promo.set()
 
 @dp.message_handler(state=UserState.promo)
 async def get_promo(message: types.Message, state: FSMContext):
-    promo_code = message.text.strip().upper() if message.text.lower() != 'нет' else None
+    promo_code = message.text.strip().upper() if message.text.lower() != 'йўқ' else None
     if promo_code:
         promo = db.get_promo_code(promo_code)
         if not promo:
-            await message.answer("❌ Промокод не найден. Попробуйте снова или напишите 'нет':")
+            await message.answer("❌ Промокод топилмади. Яна уриниб кўринг ёки 'йўқ' деб ёзинг:")
             return
         if promo[2] >= promo[1]:
-            await message.answer("❌ Этот промокод уже использован максимальное количество раз. Введите другой или напишите 'нет':")
+            await message.answer("❌ Бу промокод максимал фойдаланилди. Бошқа промокод киритинг ёки 'йўқ' деб ёзинг:")
             return
     await state.update_data(promo_code=promo_code)
     await state.update_data(books=[])
-    await message.answer("\U0001F4DA Вот список книг. Выберите до 3 штук:", reply_markup=get_books_keyboard())
+    await message.answer("\U0001F4DA Китоблар рўйхати. 3 тагача танланг:", reply_markup=get_books_keyboard())
     await UserState.books.set()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("book_"), state=UserState.books)
@@ -258,16 +277,16 @@ async def choose_books(callback_query: types.CallbackQuery, state: FSMContext):
     elif len(chosen_books) < 3:
         chosen_books.append(book)
     else:
-        await callback_query.answer("Можно выбрать максимум 3 книги.")
+        await callback_query.answer("Энг кўпи билан 3 та китоб танлаш мумкин.")
         return
 
     await state.update_data(books=chosen_books)
     selected_text = (
-        "\U0001F4DA *Вы выбрали:*\n" + "\n".join([f"• {b}" for b in chosen_books])
-        if chosen_books else "Вы пока ничего не выбрали."
+        "\U0001F4DA *Сиз танлаган китоблар:*\n" + "\n".join([f"• {b}" for b in chosen_books])
+        if chosen_books else "Сиз ҳали ҳеч нарса танламангиз."
     )
     await callback_query.message.edit_text(
-        selected_text + "\n\nВы можете выбрать до 3 книг:",
+        selected_text + "\n\nСиз 3 тагача китоб танлашингиз мумкин:",
         reply_markup=get_books_keyboard(chosen_books),
         parse_mode="Markdown"
     )
@@ -285,17 +304,17 @@ async def confirm_books(callback_query: types.CallbackQuery, state: FSMContext):
     user = db.get_user(user_id)
     trial_end = user[5]  # trial_end из базы
     text = (
-        f"📝 *Ваша регистрация завершена!* 🎉\n\n"
+        f"📝 *Рўйхатдан ўтиш муваффақиятли якунланди!* 🎉\n\n"
         f"📧 Email: `{obfuscate_email(email)}`\n"
         f"👤 Telegram: `{telegram}`\n"
-        f"📚 Книги: {books or 'не выбрано'}\n"
-        f"⏳ Пробный доступ до: *{trial_end}*\n"
-        f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}\n\n"
-        f"💳 Чтобы сохранить доступ, нажмите кнопку оплатить ниже и отправьте чек об оплате."
+        f"📚 Китоблар: {books or 'танланмаган'}\n"
+        f"⏳ Синов муддати: *{trial_end}*\n"
+        f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}\n\n"
+        f"💳 Фойдаланишни давом эттириш учун қуйидаги тугма орқали тўлов амалга оширинг ва чекни юборинг."
     )
     buttons = InlineKeyboardMarkup().add(
-        InlineKeyboardButton("✅ Перейти в канал", url=CHANNEL_LINK),
-        InlineKeyboardButton("💳 Оплатить", callback_data="payment_options")
+        InlineKeyboardButton("✅ Каналга ўтиш", url=CHANNEL_LINK),
+        InlineKeyboardButton("💳 Тўлаш", callback_data="payment_options")
     )
     await callback_query.message.edit_text(text, reply_markup=buttons, parse_mode="Markdown")
     await state.finish()
@@ -304,7 +323,7 @@ async def confirm_books(callback_query: types.CallbackQuery, state: FSMContext):
 async def show_tariffs(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     logger.info(f"Показ тарифов для user_id={user_id}")
-    await callback_query.message.edit_text("💳 Выберите тариф:", reply_markup=get_payment_options(user_id))
+    await callback_query.message.edit_text("💳 Тарифни танланг:", reply_markup=get_payment_options(user_id))
 
 @dp.callback_query_handler(lambda c: c.data.startswith("pay_"))
 async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
@@ -316,15 +335,15 @@ async def start_payment(callback_query: types.CallbackQuery, state: FSMContext):
         logger.info(f"Начало оплаты: user_id={user_id}, months={months}")
         await state.update_data(user_id=user_id, months=months, email=user[2])
         await callback_query.message.answer(
-            f"💳 Вы выбрали тариф: *{months} мес.*\n"
-            f"Номер карты: `{CARD_NUMBER}`\n\n"
-            f"📸 После оплаты отправьте сюда чек. Проверка — до 30 мин.",
+            f"💳 Сиз танлаган тариф: *{months} ой*\n"
+            f"Карта рақами: `{CARD_NUMBER}`\n\n"
+            f"📸 Тўловдан сўнг чекни бу ерга юборинг. Текшириш — 30 дақиқа ичида.",
             parse_mode="Markdown"
         )
         await UserState.payment.set()
         logger.info(f"Состояние установлено: UserState.payment для user_id={user_id}")
     else:
-        await callback_query.message.answer("❗ Не удалось найти ваш аккаунт.")
+        await callback_query.message.answer("❗ Сизнинг аккаунтингиз топилмади.")
 
 @dp.message_handler(state=UserState.payment, content_types=types.ContentType.ANY)
 async def receive_payment(message: types.Message, state: FSMContext):
@@ -334,7 +353,7 @@ async def receive_payment(message: types.Message, state: FSMContext):
     months = user_data.get("months")
     if not all([user_id, email, months]):
         logger.error(f"Недостаточно данных в state: user_id={user_id}, email={email}, months={months}")
-        await message.reply("❌ Ошибка: данные не найдены. Попробуйте начать заново.")
+        await message.reply("❌ Хатолик: маълумотлар топилмади. Яна уриниб кўринг.")
         await state.finish()
         return
 
@@ -342,12 +361,12 @@ async def receive_payment(message: types.Message, state: FSMContext):
     promo_code = user[9] if user else None
     telegram = f"https://t.me/{message.from_user.username}" if message.from_user.username else message.from_user.full_name
     caption = (
-        f"📥 Новый платёж на проверку:\n\n"
-        f"🆔 User ID: {user_id}\n"
+        f"📥 Янги тўлов текшириш учун:\n\n"
+        f"🆔 Фойдаланувчи ID: {user_id}\n"
         f"📧 Email: {obfuscate_email(email)}\n"
         f"👤 Telegram: {telegram}\n"
-        f"📅 Выбранный тариф: {months} мес\n"
-        f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}"
+        f"📅 Танланган тариф: {months} ой\n"
+        f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}"
     )
 
     try:
@@ -357,12 +376,12 @@ async def receive_payment(message: types.Message, state: FSMContext):
             elif message.document:
                 await bot.send_document(admin_id, message.document.file_id, caption=caption, reply_markup=get_confirmation_buttons(user_id))
             else:
-                await bot.send_message(admin_id, caption + f"\n\n📄 Текст:\n{message.text}", reply_markup=get_confirmation_buttons(user_id))
-        await message.reply("🧾 Спасибо! Мы передали данные администратору. ⏳ Ожидайте решения.")
+                await bot.send_message(admin_id, caption + f"\n\n📄 Матн:\n{message.text}", reply_markup=get_confirmation_buttons(user_id))
+        await message.reply("🧾 Раҳмат! Биз маълумотларни администраторга юбордик. ⏳ Жавобни кутинг.")
         logger.info(f"Чек отправлен админу: user_id={user_id}, months={months}")
     except Exception as e:
         logger.error(f"Ошибка при отправке чека админу: {e}")
-        await message.reply("❌ Ошибка при отправке чека. Попробуйте снова.")
+        await message.reply("❌ Чекни юборишда хатолик. Яна уриниб кўринг.")
     await state.finish()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_approve_"))
@@ -371,15 +390,15 @@ async def confirm_payment(callback_query: types.CallbackQuery):
     parts = callback_query.data.split("_")
     if len(parts) != 4:
         logger.error(f"Неверный формат callback_data: {callback_query.data}")
-        await callback_query.answer("❌ Ошибка: неверный запрос.")
+        await callback_query.answer("❌ Хатолик: нотўғри сўров.")
         return
 
     user_id = int(parts[2])
     months = int(parts[3])
     user = db.get_user(user_id)
     if not user:
-        logger.error(f"Iользователь с user_id={user_id} не найден")
-        await callback_query.answer("❌ Пользователь не найден.")
+        logger.error(f"Пользователь с user_id={user_id} не найден")
+        await callback_query.answer("❌ Фойдаланувчи топилмади.")
         return
 
     email = user[2]
@@ -389,49 +408,49 @@ async def confirm_payment(callback_query: types.CallbackQuery):
 
     if callback_query.message.text:
         await callback_query.message.edit_text(
-            f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁\n"
-            f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}"
+            f"✅ {obfuscate_email(email)} учун тўлов тасдиқланди. Қўшилди: {months} ой + {bonus} ой 🎁\n"
+            f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}"
         )
     else:
         await bot.send_message(
             callback_query.message.chat.id,
-            f"✅ Оплата подтверждена для {obfuscate_email(email)}. Добавлено: {months} мес + {bonus} мес 🎁\n"
-            f"🎟️ Промокод: {promo_code if promo_code else 'не использован'}"
+            f"✅ {obfuscate_email(email)} учун тўлов тасдиқланди. Қўшилди: {months} ой + {bonus} ой 🎁\n"
+            f"🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}"
         )
         await callback_query.message.delete()
 
     await bot.send_message(
         user_id,
-        "✅ Добро пожаловать! Используйте кнопку снизу для доступа к профилю.",
+        "✅ Хуш келибсиз! Профилингизга ўтиш учун қуйидаги тугмани босинг.",
         reply_markup=get_main_menu()
     )
-    await bot.send_message(user_id, f"🎉 Поздравляем! Вы приобрели доступ на {months} месяцев и получили +{bonus} месяцев в подарок!")
+    await bot.send_message(user_id, f"🎉 Табриклаймиз! Сиз {months} ойга обуна харид қилдингиз ва +{bonus} ой бонус оласиз!")
     logger.info(f"Оплата подтверждена: user_id={user_id}, months={months}, bonus={bonus}")
 
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_reject_"))
 async def reject_payment(callback_query: types.CallbackQuery):
     logger.info(f"Получен callback: {callback_query.data}")
     user_id = int(callback_query.data.split("_")[2])
-    await bot.send_message(user_id, "❌ К сожалению, оплата не прошла проверку. Попробуйте ещё раз или свяжитесь с поддержкой.")
-    await callback_query.answer("Оплата отклонена.")
+    await bot.send_message(user_id, "❌ Афсуски, тўлов текширишдан ўтмади. Яна уриниб кўринг ёки қўллаб-қувватлаш хизматига мурожаат қилинг.")
+    await callback_query.answer("Тўлов рад этилди.")
     logger.info(f"Оплата отклонена для user_id={user_id}")
 
-@dp.message_handler(lambda message: message.text == "👤 Профиль")
+@dp.message_handler(lambda message: message.text == "👤 Профилим")
 async def profile_info(message: types.Message):
     user_id = message.from_user.id
     logger.info(f"Поиск профиля для user_id: {user_id}")
     user = db.get_user(user_id)
     if user:
         user_id, _, email, telegram, books, trial_end, payment_due, paid, confirmed, promo_code = user
-        text = format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed, promo_code) + "\n\nВы можете продлить подписку ниже:"
+        text = format_user_info(user_id, email, telegram, books, trial_end, payment_due, paid, confirmed, promo_code) + "\n\nСиз қуйида обунани узайтиришингиз мумкин:"
         await message.answer(text, reply_markup=get_profile_buttons(email), parse_mode="Markdown")
     else:
         await message.answer(
-            "👋 *Вы ещё не зарегистрированы в Wordzen!*\n\n"
-            "Чтобы начать пользоваться ботом и получить 3 дня бесплатного доступа, нажмите кнопку ниже:",
+            "👋 *Сиз ҳали Wordzen'да рўйхатдан ўтмангиз!*\n\n"
+            "Ботдан фойдаланишни бошлаш ва 3 кунлик бепул муддат олиш учун қуйидаги тугмани босинг:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("\u25B6\uFE0F Зарегистрироваться", callback_data="start_registration")
+                InlineKeyboardButton("\u25B6\uFE0F Рўйхатдан ўтиш", callback_data="start_registration")
             )
         )
 
@@ -441,9 +460,9 @@ async def extend_subscription(callback_query: types.CallbackQuery, state: FSMCon
     user_id = callback_query.from_user.id
     user = db.get_user(user_id)
     if user and user[2] == email:
-        await callback_query.message.edit_text("💳 Выберите тариф для продления:", reply_markup=get_payment_options(user_id))
+        await callback_query.message.edit_text("💳 Обунани узайтириш учун тарифни танланг:", reply_markup=get_payment_options(user_id))
     else:
-        await callback_query.message.edit_text("❗ Не удалось найти ваш аккаунт.")
+        await callback_query.message.edit_text("❗ Сизнинг аккаунтингиз топилмади.")
 
 @dp.callback_query_handler(lambda c: c.data == "back_to_menu")
 async def back_to_menu(callback_query: types.CallbackQuery):
@@ -452,37 +471,101 @@ async def back_to_menu(callback_query: types.CallbackQuery):
 @dp.message_handler(commands=["users"])
 async def list_users(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав для этой команды.")
+        await message.answer("❌ Сизда бу команда учун рухсат йўқ.")
         return
     users = db.get_all_users()
-    text = "👥 Список пользователей:\n"
+    text = "👥 Фойдаланувчилар рўйхати:\n"
     for user in users:
         user_id, email, telegram, trial_end, paid, confirmed, promo_code = user
-        text += f"\n🆔 {user_id}\n📧 {obfuscate_email(email)}\n👤 {telegram}\n⏳ До: {trial_end}\n💰 Месяцев: {paid}\n✅ Оплачен: {'Да' if confirmed else 'Нет'}\n🎟️ Промокод: {promo_code if promo_code else 'не использован'}\n---"
+        text += f"\n🆔 {user_id}\n📧 {obfuscate_email(email)}\n👤 {telegram}\n⏳ Муддат: {trial_end}\n💰 Ойлар: {paid}\n✅ Тўланган: {'Ҳа' if confirmed else 'Йўқ'}\n🎟️ Промокод: {promo_code if promo_code else 'қўлланилмаган'}\n---"
     await message.answer(text)
 
 @dp.message_handler(commands=["generate_promo"])
 async def generate_promo(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав для этой команды.")
+        await message.answer("❌ Сизда бу команда учун рухсат йўқ.")
         return
     code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     db.add_promo_code(code)
-    await message.answer(f"✅ Новый промокод сгенерирован: `{code}`\nДействует 5 раз, даёт 7 дней бонуса.")
+    await message.answer(f"✅ Янги промокод яратилди: `{code}`\n5 марта фойдаланиш мумкин, 7 кун бонус беради.")
 
 @dp.message_handler(commands=["promo_stats"])
 async def promo_stats(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав для этой команды.")
+        await message.answer("❌ Сизда бу команда учун рухсат йўқ.")
         return
     stats = db.get_promo_stats()
     if not stats:
-        await message.answer("📊 Промокодов пока нет.")
+        await message.answer("📊 Ҳозирча промокодлар йўқ.")
         return
-    text = "📊 Статистика промокодов:\n"
+    text = "📊 Промокодлар статистикаси:\n"
     for code, limit, used, days in stats:
-        text += f"\nКод: `{code}`\nЛимит: {limit}\nИспользовано: {used}\nБонус: {days} дней\n---"
+        text += f"\nКод: `{code}`\nЧеклов: {limit}\nФойдаланилди: {used}\nБонус: {days} кун\n---"
     await message.answer(text)
+
+@dp.message_handler(commands=["delete_user"])
+async def delete_user(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Сизда бу команда учун рухсат йўқ.")
+        return
+    try:
+        user_id = int(message.get_args())
+        user = db.get_user(user_id)
+        if not user:
+            await message.answer(f"❌ ID {user_id} билан фойдаланувчи топилмади.")
+            return
+        db.delete_user(user_id)
+        await message.answer(f"✅ ID {user_id} билан фойдаланувчи ўчирилди.")
+    except ValueError:
+        await message.answer("❌ Фойдаланувчи ID'ни киритинг. Масалан: /delete_user 123456789")
+
+@dp.message_handler(commands=["reset_promo"])
+async def reset_promo(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Сизда бу команда учун рухсат йўқ.")
+        return
+    code = message.get_args().strip().upper()
+    if not code:
+        await message.answer("❌ Промокодни киритинг. Масалан: /reset_promo ABC123")
+        return
+    promo = db.get_promo_code(code)
+    if not promo:
+        await message.answer(f"❌ {code} промокоди топилмади.")
+        return
+    db.reset_promo_code(code)
+    await message.answer(f"✅ {code} промокоди счётчиги тозаланди. Энди уни яна ишлатиш мумкин.")
+
+@dp.message_handler(commands=["stats"])
+async def show_stats(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Сизда бу команда учун рухсат йўқ.")
+        return
+    total_users, paid_users, promo_users = db.get_stats()
+    text = (
+        "📊 Умумий статистика:\n"
+        f"👥 Жами фойдаланувчилар: {total_users}\n"
+        f"💳 Обуна тўлаганлар: {paid_users}\n"
+        f"🎟️ Промокод ишлатганлар: {promo_users}"
+    )
+    await message.answer(text)
+
+@dp.message_handler(commands=["notify_all"])
+async def notify_all(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Сизда бу команда учун рухсат йўқ.")
+        return
+    msg_text = message.get_args()
+    if not msg_text:
+        await message.answer("❌ Хабарни киритинг. Масалан: /notify_all Мухим эълон!")
+        return
+    users = db.get_all_users()
+    for user in users:
+        user_id = user[0]
+        try:
+            await bot.send_message(user_id, f"📢 Эълон:\n{msg_text}")
+        except Exception as e:
+            logger.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
+    await message.answer(f"✅ Хабар {len(users)} фойдаланувчига юборилди.")
 
 async def check_payments():
     while True:
@@ -491,13 +574,13 @@ async def check_payments():
 
         for email, telegram in db.get_unpaid_users(now):
             for admin_id in ADMIN_IDS:
-                await bot.send_message(admin_id, f"❗ Ученик не оплатил:\nEmail: {obfuscate_email(email)}\nTelegram: {telegram}")
+                await bot.send_message(admin_id, f"❗ Фойдаланувчи тўлов қилмади:\nEmail: {obfuscate_email(email)}\nTelegram: {telegram}")
 
         for email, telegram in db.get_users_near_trial_end(tomorrow):
             for admin_id in ADMIN_IDS:
-                await bot.send_message(admin_id, f"⏰ Завтра заканчивается триал у:\nEmail: {obfuscate_email(email)}\nTelegram: {telegram}")
+                await bot.send_message(admin_id, f"⏰ Эртага синов муддати тугайди:\nEmail: {obfuscate_email(email)}\nTelegram: {telegram}")
             try:
-                await bot.send_message(telegram, f"⏳ Завтра заканчивается ваш пробный период в Wordzen. Оплатите подписку: {CARD_NUMBER}")
+                await bot.send_message(telegram, f"⏳ Эртага Wordzen'да синов муддати тугайди. Обунани тўланг: {CARD_NUMBER}")
             except Exception as e:
                 logger.error(f"Ошибка уведомления {telegram}: {e}")
         await asyncio.sleep(86400)
