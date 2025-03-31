@@ -1,3 +1,4 @@
+# main.py (первая половина)
 import os
 import asyncio
 import logging
@@ -35,7 +36,9 @@ class Database:
         self._initialize_promo_codes()
 
     def _create_tables(self):
-        # Удаляем старую таблицу promo_codes (временная мера для исправления)
+        # Удаляем старую таблицу users (временная мера для исправления)
+        self.cursor.execute("DROP TABLE IF EXISTS users")
+        # Удаляем старую таблицу promo_codes (уже добавлено ранее)
         self.cursor.execute("DROP TABLE IF EXISTS promo_codes")
         
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS users (
@@ -50,11 +53,11 @@ class Database:
             paid_months INTEGER DEFAULT 0,
             payment_confirmed INTEGER DEFAULT 0,
             promo_code TEXT,
-            is_active INTEGER DEFAULT 1
+            is_active INTEGER DEFAULT 1  -- Добавляем столбец is_active
         )''')
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS promo_codes (
             code TEXT PRIMARY KEY,
-            teacher_name TEXT,  -- Добавляем столбец teacher_name
+            teacher_name TEXT,
             used_count INTEGER DEFAULT 0,
             bonus_days INTEGER DEFAULT 7
         )''')
@@ -91,7 +94,7 @@ class Database:
                 trial_end = (datetime.now() + timedelta(days=3 + bonus_days)).strftime('%Y-%m-%d')
                 self.cursor.execute("UPDATE promo_codes SET used_count = used_count + 1 WHERE code = %s", (promo_code,))
         self.cursor.execute(
-            "INSERT INTO users (user_id, source, email, telegram, books, trial_end, payment_due, promo_code) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id) DO NOTHING",
+            "INSERT INTO users (user_id, source, email, telegram, books, trial_end, payment_due, promo_code, is_active) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1) ON CONFLICT (user_id) DO NOTHING",
             (user_id, source, email, telegram, books, trial_end, trial_end, promo_code)
         )
         self.conn.commit()
@@ -227,7 +230,7 @@ def get_reset_books_button(user_id):
     return InlineKeyboardMarkup().add(
         InlineKeyboardButton("📚 Янги китоблар танлаш", callback_data=f"reset_books_{user_id}")
     )
-
+    # main.py (вторая половина)
 # Вспомогательные функции
 def format_user_info(user_id, source, email, telegram, books, trial_end, payment_due, paid, confirmed, promo_code, is_active):
     obfuscated_email = obfuscate_email(email)
@@ -270,7 +273,7 @@ async def start(message: types.Message):
                     "\U0001F4DA *Wordzen'га хуш келибсиз!*\n\n"
                     "Бу ерда сиз танланган китобларга эга бўласиз.\n\n"
                     "\U0001F381 *Янги фойдаланувчилар учун 3 кунлик бепул муддат!*\n\n"
-                    "Рўйхатдан ўтиш учун қуйидаги тугмани босинг \U0001F447"
+                    "Рўйхатдан ўтиш учун қуйиданги тугмани босинг \U0001F447"
                 ),
                 parse_mode="Markdown",
                 reply_markup=get_start_button()
@@ -649,7 +652,7 @@ async def promo_stats(message: types.Message):
     text = "📊 Промокодлар статистикаси:\n"
     for code, teacher_name, used_count, bonus_days in stats:
         text += f"\nКод: `{code}`\nЎқитувчи: {teacher_name}\nФойдаланилди: {used_count}\nБонус: {bonus_days} кун\n---"
-    await message.answer(text)
+    await message.answer(text, parse_mode="Markdown")
 
 @dp.message_handler(commands=["stats"])
 async def show_stats(message: types.Message):
