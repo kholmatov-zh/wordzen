@@ -35,6 +35,9 @@ class Database:
         self._initialize_promo_codes()
 
     def _create_tables(self):
+        # Удаляем старую таблицу promo_codes (временная мера для исправления)
+        self.cursor.execute("DROP TABLE IF EXISTS promo_codes")
+        
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             user_id BIGINT UNIQUE,
@@ -51,7 +54,7 @@ class Database:
         )''')
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS promo_codes (
             code TEXT PRIMARY KEY,
-            teacher_name TEXT,
+            teacher_name TEXT,  -- Добавляем столбец teacher_name
             used_count INTEGER DEFAULT 0,
             bonus_days INTEGER DEFAULT 7
         )''')
