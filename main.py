@@ -1,20 +1,4 @@
-# Временный код для очистки базы данных
-import os
-import psycopg2
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-conn = psycopg2.connect(DATABASE_URL)
-cursor = conn.cursor()
-
-# Очистка всех таблиц
-cursor.execute("DROP TABLE IF EXISTS users CASCADE")
-cursor.execute("DROP TABLE IF EXISTS promo_codes CASCADE")
-cursor.execute("DROP TABLE IF EXISTS messages CASCADE")
-conn.commit()
-print("Все таблицы удалены.")
-
-cursor.close()
-conn.close()
 
 
 
